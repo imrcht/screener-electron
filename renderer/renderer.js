@@ -11,13 +11,19 @@
   $('#logo-btn').innerHTML = icon('logo', { size: 18 });
   $('.tb-hide .chev').innerHTML = icon('chevron-down', { size: 14 });
   $('#stop-btn').innerHTML = icon('stop-square', { size: 15 });
-  document.querySelector('.act[data-mode="assist"] .ic').innerHTML = icon('sparkles', { size: 16 });
-  document.querySelector('.act[data-mode="say"] .ic').innerHTML = icon('wand-sparkles', { size: 16 });
-  document.querySelector('.act[data-mode="followup"] .ic').innerHTML = icon('message-circle', { size: 16 });
-  document.querySelector('.act[data-mode="recap"] .ic').innerHTML = icon('refresh-cw', { size: 16 });
+  const assistIc = document.querySelector('.act[data-mode="assist"] .ic');
+  if (assistIc) assistIc.innerHTML = icon('sparkles', { size: 15 });
+  const leetcodeIc = document.querySelector('.act[data-mode="leetcode"] .ic');
+  if (leetcodeIc) leetcodeIc.innerHTML = icon('code', { size: 15 });
+  const debugIc = document.querySelector('.act[data-mode="debug"] .ic');
+  if (debugIc) debugIc.innerHTML = icon('bug', { size: 15 });
+  const sayIc = document.querySelector('.act[data-mode="say"] .ic');
+  if (sayIc) sayIc.innerHTML = icon('wand-sparkles', { size: 15 });
   $('#smart-toggle .ic').innerHTML = icon('zap', { size: 14 });
+  $('#screen-toggle .ic').innerHTML = icon('monitor', { size: 14 });
   $('#more-btn').innerHTML = icon('more-horizontal', { size: 18 });
   $('#send-btn').innerHTML = icon('play', { size: 15 });
+  $('.tb-notes .notes-ic').innerHTML = icon('file-text', { size: 14 });
 
   // ---- state -------------------------------------------------------------
   let settings = null;
@@ -79,16 +85,59 @@
     return html;
   }
 
-  function clearMessages() { messages.innerHTML = ''; aiEl = null; caretEl = null; }
+  function scrollToBottom() {
+    messages.scrollTop = messages.scrollHeight;
+  }
+
+  function pruneMessages() {
+    // Keep at least 4-6 message rounds (max 12 child nodes in #messages)
+    while (messages.children.length > 12) {
+      messages.removeChild(messages.firstElementChild);
+    }
+  }
+
+  function clearMessages() {
+    messages.innerHTML = '';
+    aiEl = null;
+    caretEl = null;
+    if (cue.chatClear) cue.chatClear();
+  }
 
   function addUserBubble(text) {
+    pruneMessages();
+    const row = document.createElement('div');
+    row.className = 'user-msg-row';
+
+    const actions = document.createElement('div');
+    actions.className = 'user-msg-actions';
+
+    const editBtn = document.createElement('button');
+    editBtn.className = 'msg-action-btn edit-btn';
+    editBtn.title = 'Edit in composer';
+    editBtn.innerHTML = icon('pencil', { size: 12 });
+    editBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      input.value = text;
+      syncPlaceholder();
+      input.focus();
+      input.selectionStart = input.selectionEnd = input.value.length;
+      composer.classList.add('composer-flash');
+      setTimeout(() => composer.classList.remove('composer-flash'), 500);
+    });
+    actions.appendChild(editBtn);
+
     const b = document.createElement('div');
     b.className = 'user-bubble';
     b.textContent = text;
-    messages.appendChild(b);
+
+    row.appendChild(actions);
+    row.appendChild(b);
+    messages.appendChild(row);
+    scrollToBottom();
   }
 
   function startAi(small) {
+    pruneMessages();
     aiEl = document.createElement('div');
     aiEl.className = 'ai-text' + (small ? ' small' : '');
     aiEl.dataset.raw = '';
@@ -96,6 +145,7 @@
     caretEl.className = 'ai-caret';
     aiEl.appendChild(caretEl);
     messages.appendChild(aiEl);
+    scrollToBottom();
   }
 
   function appendToken(t) {
@@ -105,6 +155,7 @@
     span.className = 'w';
     span.textContent = t;
     aiEl.insertBefore(span, caretEl);
+    scrollToBottom();
   }
 
   function finalizeAi() {
@@ -112,15 +163,22 @@
     const raw = aiEl.dataset.raw || '';
     aiEl.innerHTML = renderMarkdown(raw);
     aiEl = null; caretEl = null;
+    scrollToBottom();
   }
 
-  function setBusy(v) { busy = v; $('#send-btn').classList.toggle('busy', v); }
+  function setBusy(v) {
+    busy = v;
+    const sendBtn = $('#send-btn');
+    sendBtn.classList.toggle('busy', v);
+    sendBtn.innerHTML = icon(v ? 'stop-square' : 'play', { size: v ? 13 : 15 });
+    sendBtn.title = v ? 'Stop generation (Esc)' : 'Send';
+  }
 
   // ---- actions -----------------------------------------------------------
   function runMode(mode, text) {
     if (busy) return;
     setBusy(true);
-    cue.ask({ mode, text: text || '' });
+    cue.ask({ mode, text: text || '', screenAttached });
   }
 
   document.querySelectorAll('.act').forEach((btn) => {
@@ -142,6 +200,10 @@
   $('#input-area').addEventListener('click', () => input.focus());
 
   function send() {
+    if (busy) {
+      cue.askStop();
+      return;
+    }
     const text = input.value.trim();
     if (!text) { runMode('assist', ''); return; }
     input.value = ''; syncPlaceholder();
@@ -149,19 +211,196 @@
   }
   $('#send-btn').addEventListener('click', send);
   input.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && busy) {
+      e.preventDefault();
+      cue.askStop();
+      return;
+    }
     const captured = keyEventToAccelerator(e);
     if (captured.accelerator && captured.accelerator.toLowerCase() === assistShortcut.toLowerCase()) {
       e.preventDefault(); runMode('assist', ''); return;
     }
     if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); send(); }
   });
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && busy) {
+      cue.askStop();
+    }
+  });
 
-  // Smart toggle
   const smartBtn = $('#smart-toggle');
   smartBtn.addEventListener('click', async () => {
     settings.smart = !settings.smart;
     smartBtn.classList.toggle('on', settings.smart);
     await cue.settingsSet({ smart: settings.smart });
+    modelCacheProvider = null;
+    syncModelBtn();
+  });
+
+  // ---- Screen toggle (attach screenshot to typed questions) ----------------
+  const screenBtn = $('#screen-toggle');
+  let screenAttached = false; // default: off — text-only for speed
+
+  screenBtn.addEventListener('click', () => {
+    screenAttached = !screenAttached;
+    screenBtn.classList.toggle('on', screenAttached);
+  });
+
+  // ---- Model picker (in-chat model switching) ----------------------------
+  const modelBtn = $('#model-picker-btn');
+  const modelDropdown = $('#model-dropdown');
+  const modelSearch = $('#model-search');
+  const modelList = $('#model-list');
+  let modelCache = [];
+  let modelCacheProvider = null;
+
+  function currentModelName() {
+    if (!settings) return '…';
+    const tier = settings.smart ? 'smart' : 'fast';
+    const m = (settings.models[settings.provider] || {})[tier];
+    return m || 'unset';
+  }
+
+  function syncModelBtn() {
+    modelBtn.textContent = currentModelName();
+  }
+
+  function renderModelItems(filter) {
+    const query = (filter || '').toLowerCase();
+    const current = currentModelName();
+    modelList.innerHTML = '';
+    const filtered = query
+      ? modelCache.filter(m => m.toLowerCase().includes(query))
+      : modelCache;
+
+    if (!filtered.length) {
+      const empty = document.createElement('div');
+      empty.className = 'model-item';
+      empty.style.color = 'var(--tx-mut)';
+      empty.textContent = modelCache.length ? 'No matches' : 'Loading…';
+      modelList.appendChild(empty);
+      return;
+    }
+
+    const sorted = filtered.slice().sort((a, b) => {
+      if (a === current) return -1;
+      if (b === current) return 1;
+      return 0;
+    });
+
+    for (const id of sorted.slice(0, 200)) {
+      const el = document.createElement('div');
+      el.className = 'model-item' + (id === current ? ' active' : '');
+      el.textContent = id;
+      el.addEventListener('click', async () => {
+        const tier = settings.smart ? 'smart' : 'fast';
+        if (!settings.models[settings.provider]) settings.models[settings.provider] = {};
+        settings.models[settings.provider][tier] = id;
+        await cue.modelSet(id);
+        syncModelBtn();
+        closeModelPicker();
+      });
+      modelList.appendChild(el);
+    }
+  }
+
+  async function openModelPicker() {
+    closeProviderPicker();
+    modelDropdown.classList.remove('hidden');
+    modelSearch.value = '';
+    modelSearch.focus();
+
+    if (modelCacheProvider !== settings.provider) {
+      modelCache = [];
+      renderModelItems('');
+      modelCache = await cue.modelsFetch();
+      modelCacheProvider = settings.provider;
+    }
+    renderModelItems('');
+  }
+
+  function closeModelPicker() {
+    modelDropdown.classList.add('hidden');
+  }
+
+  modelBtn.addEventListener('click', () => {
+    if (modelDropdown.classList.contains('hidden')) openModelPicker();
+    else closeModelPicker();
+  });
+
+  modelSearch.addEventListener('input', () => {
+    renderModelItems(modelSearch.value);
+  });
+
+  document.addEventListener('mousedown', (e) => {
+    if (!modelDropdown.classList.contains('hidden') &&
+        !e.target.closest('#model-picker-wrap')) {
+      closeModelPicker();
+    }
+  });
+
+  modelSearch.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { e.stopPropagation(); closeModelPicker(); }
+  });
+
+  // ---- Provider picker (in-chat provider switching) ----------------------
+  const providerBtn = $('#provider-picker-btn');
+  const providerDropdown = $('#provider-dropdown');
+  const providerListEl = $('#provider-list');
+  const PROVIDER_LABELS = {
+    openai: 'OpenAI', anthropic: 'Anthropic', gemini: 'Gemini',
+    nvidia: 'Nvidia', omniroute: 'OmniRoute'
+  };
+  const PROVIDER_IDS = Object.keys(PROVIDER_LABELS);
+
+  function syncProviderBtn() {
+    providerBtn.textContent = PROVIDER_LABELS[settings.provider] || settings.provider;
+  }
+
+  function renderProviderItems() {
+    providerListEl.innerHTML = '';
+    for (const id of PROVIDER_IDS) {
+      const el = document.createElement('div');
+      const hasKey = !!(settings.apiKeys && settings.apiKeys[id]);
+      el.className = 'provider-item' + (id === settings.provider ? ' active' : '') + (hasKey ? ' has-key' : '');
+      const dot = document.createElement('span');
+      dot.className = 'provider-dot';
+      const label = document.createElement('span');
+      label.textContent = PROVIDER_LABELS[id];
+      el.appendChild(dot);
+      el.appendChild(label);
+      el.addEventListener('click', async () => {
+        settings.provider = id;
+        await cue.settingsSet({ provider: id });
+        modelCacheProvider = null;
+        syncProviderBtn();
+        syncModelBtn();
+        closeProviderPicker();
+      });
+      providerListEl.appendChild(el);
+    }
+  }
+
+  function openProviderPicker() {
+    closeModelPicker();
+    renderProviderItems();
+    providerDropdown.classList.remove('hidden');
+  }
+
+  function closeProviderPicker() {
+    providerDropdown.classList.add('hidden');
+  }
+
+  providerBtn.addEventListener('click', () => {
+    if (providerDropdown.classList.contains('hidden')) openProviderPicker();
+    else closeProviderPicker();
+  });
+
+  document.addEventListener('mousedown', (e) => {
+    if (!providerDropdown.classList.contains('hidden') &&
+        !e.target.closest('#provider-picker-wrap')) {
+      closeProviderPicker();
+    }
   });
 
   // Hide / collapse
@@ -169,6 +408,34 @@
     const collapsed = $('#panel').classList.toggle('collapsed');
     $('#hide-btn').classList.toggle('collapsed', collapsed);
     $('#live-dot').style.display = collapsed ? 'none' : '';
+  });
+
+  // ---- notes panel --------------------------------------------------------
+  const notesBtn = $('#notes-btn');
+  const notesWrap = $('#notes-wrap');
+  const notesInput = $('#notes-input');
+  const notesClose = $('#notes-close');
+  let notesSaveTimer = null;
+
+  function toggleNotes() {
+    const willShow = notesWrap.classList.contains('hidden');
+    notesWrap.classList.toggle('hidden');
+    notesBtn.classList.toggle('active', willShow);
+    if (willShow) notesInput.focus();
+  }
+
+  notesBtn.addEventListener('click', toggleNotes);
+  notesClose.addEventListener('click', () => {
+    notesWrap.classList.add('hidden');
+    notesBtn.classList.remove('active');
+  });
+
+  // Save notes on input with debounce (500ms) — no trimming!
+  notesInput.addEventListener('input', () => {
+    clearTimeout(notesSaveTimer);
+    notesSaveTimer = setTimeout(async () => {
+      await cue.settingsSet({ notes: notesInput.value });
+    }, 500);
   });
 
   // Stop = start/stop listening. Kick off system-audio capture straight from the click so
@@ -239,7 +506,6 @@
     if (active) { startMic(); startSystemAudio(); } else { stopMic(); stopSystemAudio(); }
   });
   cue.on('llm:start', ({ userBubble, small }) => {
-    clearMessages();
     if (userBubble) addUserBubble(userBubble);
     startAi(!!small);
     setBusy(true);
@@ -274,12 +540,21 @@
   $('#s-close').addEventListener('click', closeSettings);
   scrim.addEventListener('click', (e) => { if (e.target === scrim) closeSettings(); });
 
+  function toggleOmniRouteUrl(show) {
+    $('#omniroute-url-label').style.display = show ? '' : 'none';
+    $('#omniroute-url-field').style.display = show ? '' : 'none';
+  }
+
   function fillSettings() {
     document.querySelectorAll('#provider-seg button').forEach((b) => b.classList.toggle('on', b.dataset.provider === settings.provider));
     $('#key-openai').value = settings.apiKeys.openai || '';
     $('#key-anthropic').value = settings.apiKeys.anthropic || '';
     $('#key-gemini').value = settings.apiKeys.gemini || '';
     $('#key-nvidia').value = settings.apiKeys.nvidia || '';
+    $('#key-omniroute').value = settings.apiKeys.omniroute || '';
+    const urls = settings.providerUrls || {};
+    $('#omniroute-url').value = urls.omniroute || 'http://localhost:20128/v1';
+    toggleOmniRouteUrl(settings.provider === 'omniroute');
     $('#resume-context').value = settings.resumeContext || '';
     const m = settings.models[settings.provider] || { fast: '', smart: '' };
     $('#model-fast').value = m.fast; $('#model-smart').value = m.smart;
@@ -293,7 +568,7 @@
   });
   function statusText() {
     const k = settings.apiKeys;
-    const has = [k.openai && 'OpenAI', k.anthropic && 'Anthropic', k.gemini && 'Gemini', k.nvidia && 'Nvidia'].filter(Boolean);
+    const has = [k.openai && 'OpenAI', k.anthropic && 'Anthropic', k.gemini && 'Gemini', k.nvidia && 'Nvidia', k.omniroute && 'OmniRoute'].filter(Boolean);
     const stt = k.openai ? 'Whisper' : (k.gemini ? 'Gemini' : 'none');
     return 'Active: ' + settings.provider + ' · keys: ' + (has.join(', ') || 'none set') + ' · transcription: ' + stt;
   }
@@ -302,6 +577,8 @@
     document.querySelectorAll('#provider-seg button').forEach((x) => x.classList.toggle('on', x === b));
     const m = settings.models[settings.provider] || { fast: '', smart: '' };
     $('#model-fast').value = m.fast; $('#model-smart').value = m.smart;
+    toggleOmniRouteUrl(b.dataset.provider === 'omniroute');
+    modelCacheProvider = null;
     $('#s-status').textContent = statusText();
   }));
   async function saveSettings() {
@@ -309,11 +586,17 @@
     settings.apiKeys.anthropic = $('#key-anthropic').value.trim();
     settings.apiKeys.gemini = $('#key-gemini').value.trim();
     settings.apiKeys.nvidia = $('#key-nvidia').value.trim();
+    settings.apiKeys.omniroute = $('#key-omniroute').value.trim();
+    if (!settings.providerUrls) settings.providerUrls = {};
+    settings.providerUrls.omniroute = $('#omniroute-url').value.trim() || 'http://localhost:20128/v1';
     settings.resumeContext = $('#resume-context').value.trim();
     if (!settings.models[settings.provider]) settings.models[settings.provider] = {};
     settings.models[settings.provider].fast = $('#model-fast').value.trim();
     settings.models[settings.provider].smart = $('#model-smart').value.trim();
     await cue.settingsSet(settings);
+    modelCacheProvider = null;
+    syncProviderBtn();
+    syncModelBtn();
   }
 
   // Assist shortcut recorder. The renderer captures a key combination and the
@@ -426,7 +709,11 @@
 
   // ---- global keys -------------------------------------------------------
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !scrim.classList.contains('hidden')) closeSettings();
+    if (e.key === 'Escape') {
+      if (!providerDropdown.classList.contains('hidden')) closeProviderPicker();
+      if (!modelDropdown.classList.contains('hidden')) closeModelPicker();
+      if (!scrim.classList.contains('hidden')) closeSettings();
+    }
     if (isCmdOrCtrl(e)) {
       if (e.key === ',') { e.preventDefault(); openSettings(); }
     }
@@ -446,7 +733,7 @@
   function setIgnore(v) { if (v !== ignoring) { ignoring = v; cue.setIgnoreMouse(v); } }
   document.addEventListener('mousemove', (e) => {
     const el = document.elementFromPoint(e.clientX, e.clientY);
-    const overUI = !!(el && el.closest && el.closest('#toolbar, #panel-wrap, #settings-scrim, #onboard-scrim'));
+    const overUI = !!(el && el.closest && el.closest('#toolbar, #panel-wrap, #notes-wrap, #settings-scrim, #onboard-scrim'));
     setIgnore(!overUI);
   });
   setIgnore(true); // start fully click-through; hovering the panel re-enables it
@@ -471,7 +758,7 @@
     {
       icon: '🔑',
       title: 'Connect an AI provider',
-      body: 'cue uses <strong>your own</strong> API key — pick <span class="hl">OpenAI</span>, <span class="hl">Anthropic</span>, <span class="hl">Google Gemini</span>, or <span class="hl">Nvidia</span>. Get a key from your provider, then paste it into cue\'s Settings.<br><br><strong>Tip:</strong> the listening features need speech-to-text access (an OpenAI key with Whisper, or a Gemini key). A chat-only key still powers screen &amp; coding help.',
+      body: 'cue uses <strong>your own</strong> API key — pick <span class="hl">OpenAI</span>, <span class="hl">Anthropic</span>, <span class="hl">Google Gemini</span>, <span class="hl">Nvidia</span>, or <span class="hl">OmniRoute</span>. Get a key from your provider, then paste it into cue\'s Settings.<br><br><strong>Tip:</strong> the listening features need speech-to-text access (an OpenAI key with Whisper, or a Gemini key). A chat-only key still powers screen &amp; coding help.',
       buttons: [{ label: 'Open cue Settings', action: () => { finishOnboard(); openSettings(); } }]
     },
     {
@@ -519,10 +806,14 @@
     smartBtn.classList.toggle('on', !!settings.smart);
     showExample();
     syncPlaceholder();
+    // Load saved notes
+    if (settings.notes) notesInput.value = settings.notes;
     const st = await cue.captureState();
     $('#live-dot').classList.toggle('off', !st.active);
     $('#stop-btn').classList.toggle('active', st.active);
     if (!settings.onboarded) showOnboard();
+    syncProviderBtn();
+    syncModelBtn();
 
   })();
 })();

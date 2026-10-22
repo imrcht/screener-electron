@@ -8,14 +8,19 @@ const FILE = path.join(app.getPath('userData'), 'cue-data.json');
 const DEFAULTS = {
   provider: 'openai',
   smart: false,
+  notes: '',
   resumeContext: '',
   shortcuts: { assist: 'CommandOrControl+Return' },
-  apiKeys: { openai: '', anthropic: '', gemini: '', deepgram: '', nvidia: '' },
+  apiKeys: { openai: '', anthropic: '', gemini: '', deepgram: '', nvidia: '', omniroute: '' },
+  providerUrls: {
+    omniroute: 'http://localhost:20128/v1'
+  },
   models: {
     openai: { fast: 'gpt-4o-mini', smart: 'gpt-4o' },
     anthropic: { fast: 'claude-3-5-haiku-latest', smart: 'claude-3-5-sonnet-latest' },
     gemini: { fast: 'gemini-2.5-flash', smart: 'gemini-2.5-pro' },
-    nvidia: { fast: 'meta/llama-3.2-11b-vision-instruct', smart: 'meta/llama-3.2-90b-vision-instruct' }
+    nvidia: { fast: 'meta/llama-3.2-11b-vision-instruct', smart: 'meta/llama-3.2-90b-vision-instruct' },
+    omniroute: { fast: 'auto/fast', smart: 'auto' }
   }
 };
 
@@ -40,7 +45,7 @@ function load() {
   
   // Auto-switch provider if the current one has no key, but another one does.
   if (!data.apiKeys[data.provider]) {
-    const validProviders = ['openai', 'anthropic', 'gemini', 'nvidia'];
+    const validProviders = ['openai', 'anthropic', 'gemini', 'nvidia', 'omniroute'];
     const active = validProviders.find(p => data.apiKeys[p]);
     if (active) {
       data.provider = active;

@@ -5,6 +5,7 @@ const store = require('./src/store');
 const { captureScreenshot } = require('./src/screen');
 const { createSTT } = require('./src/stt');
 const { createLLM } = require('./src/llm');
+const { fetchModelsForProvider } = require('./src/models');
 const { MODES } = require('./src/prompts');
 const { appendResumeContext } = require('./src/profile-context');
 const { rms16 } = require('./src/wav');
@@ -23,6 +24,8 @@ const state = { capturing: false, busy: false, transcribing: { you: false, them:
 let sttDisabled = false; // set when the key can't reach any speech model (stops retry spam)
 const buffers = { you: [], them: [] };
 const transcript = []; // { channel, text, ts }
+const sessionChatHistory = []; // { role: 'user' | 'assistant', text: string }
+let activeAbortController = null;
 const FLUSH_MS = 3500;
 const MIN_BYTES = Math.floor(16000 * 2 * 0.6); // ~0.6s
 const RMS_GATE = 240;
@@ -141,8 +144,8 @@ function setCapturing(active) {
 }
 
 // -------- feature runner --------
-async function runFeature(mode, userText) {
-  if (DEBUG) console.log('[DEBUG MAIN] runFeature called:', { mode, userText, isBusy: state.busy });
+async function runFeature(mode, userText, screenAttached) {
+  if (DEBUG) console.log('[DEBUG MAIN] runFeature called:', { mode, userText, screenAttached, isBusy: state.busy });
   if (state.busy) return;
   const def = MODES[mode];
   if (!def) {
@@ -163,8 +166,12 @@ async function runFeature(mode, userText) {
       return;
     }
 
+    // For 'ask' mode, the renderer controls whether to attach the screen via the toggle.
+    // For all other modes, respect the mode definition's needsScreen flag.
+    const shouldCaptureScreen = mode === 'ask' ? !!screenAttached : def.needsScreen;
+
     let imageDataUrl = null;
-    if (def.needsScreen) {
+    if (shouldCaptureScreen) {
       if (DEBUG) console.log('[DEBUG MAIN] Feature needs screen. Capturing screenshot...');
       try { 
         imageDataUrl = await captureScreenshot(); 
@@ -178,17 +185,44 @@ async function runFeature(mode, userText) {
 
     const built = def.build({ transcript, userText: userText || '' });
     if (DEBUG) console.log('[DEBUG MAIN] Built prompt. Starting LLM stream...');
+
+    activeAbortController = new AbortController();
+    const currentSignal = activeAbortController.signal;
+
+    // For 'ask' mode, include up to the last 6 messages (at least 4 messages / 2-3 previous turns) for conversational memory.
+    let turns = [{ role: 'user', text: built }];
+    if (mode === 'ask' && sessionChatHistory.length > 0) {
+      const recentHistory = sessionChatHistory.slice(-6);
+      turns = [...recentHistory, { role: 'user', text: built }];
+    }
+
     const fullText = await llm.stream({
       system: appendResumeContext(def.system, settings.resumeContext),
-      turns: [{ role: 'user', text: built }],
+      turns,
       imageDataUrl,
+      signal: currentSignal,
       onToken: (t) => send('llm:token', { text: t })
     });
     if (DEBUG) console.log('[DEBUG MAIN] Full LLM Output:\n', fullText);
-    send('llm:done', {});
+
+    // Save turn to session history if meaningful response was generated
+    if (fullText && fullText.trim()) {
+      sessionChatHistory.push({ role: 'user', text: userText || built });
+      sessionChatHistory.push({ role: 'assistant', text: fullText.trim() });
+      if (sessionChatHistory.length > 12) {
+        sessionChatHistory.splice(0, sessionChatHistory.length - 12);
+      }
+    }
+
+    send('llm:done', { aborted: currentSignal.aborted });
   } catch (e) {
-    send('llm:error', { message: 'Error: ' + (e && e.message ? e.message : String(e)) });
+    if (activeAbortController && activeAbortController.signal.aborted) {
+      send('llm:done', { aborted: true });
+    } else {
+      send('llm:error', { message: 'Error: ' + (e && e.message ? e.message : String(e)) });
+    }
   } finally {
+    activeAbortController = null;
     state.busy = false;
   }
 }
@@ -199,7 +233,27 @@ ipcMain.handle('settings:set', (_e, patch) => { sttDisabled = false; return stor
 ipcMain.handle('shortcut:assist:set', (_e, accelerator) => setAssistShortcut(accelerator));
 ipcMain.handle('capture:toggle', () => setCapturing(!state.capturing));
 ipcMain.handle('capture:state', () => ({ active: state.capturing }));
-ipcMain.on('ask', (_e, payload) => runFeature(payload.mode, payload.text));
+ipcMain.on('ask', (_e, payload) => runFeature(payload.mode, payload.text, payload.screenAttached));
+ipcMain.on('ask:stop', () => {
+  if (activeAbortController) {
+    if (DEBUG) console.log('[DEBUG MAIN] ask:stop received, aborting active stream');
+    activeAbortController.abort();
+  }
+});
+ipcMain.handle('chat:clear', () => {
+  sessionChatHistory.length = 0;
+  return true;
+});
+ipcMain.handle('models:fetch', async () => {
+  const settings = store.getSettings();
+  return fetchModelsForProvider(settings);
+});
+ipcMain.handle('model:set', (_e, modelId) => {
+  const settings = store.getSettings();
+  const tier = settings.smart ? 'smart' : 'fast';
+  const patch = { models: { [settings.provider]: { [tier]: modelId } } };
+  return store.setSettings(patch);
+});
 ipcMain.on('mic:pcm', (_e, arrayBuffer) => { if (state.capturing) buffers.you.push(Buffer.from(arrayBuffer)); });
 ipcMain.on('system:pcm', (_e, arrayBuffer) => { if (state.capturing) buffers.them.push(Buffer.from(arrayBuffer)); });
 ipcMain.on('mouse:ignore', (_e, v) => { if (win) win.setIgnoreMouseEvents(!!v, { forward: true }); });

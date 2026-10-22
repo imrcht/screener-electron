@@ -24,23 +24,38 @@ const MODES = {
     }
   },
 
-  // Meeting copilot: what to say next.
+  // Smart interview & conversation reply. Uses screen + transcript + résumé context.
   say: {
-    needsScreen: false,
-    userBubble: 'What should I say?',
+    needsScreen: true,
+    userBubble: 'How should I respond?',
     small: false,
     system:
-      'You are cue, whispering suggested replies to the user during a live conversation. ' +
-      '"Them" is the other person; "You" is the user. Based on what Them just said and what You already said, ' +
-      'draft ONE short, natural, confident reply the user can say out loud, in the first person. No quotes, no preamble, 1–3 sentences.',
+      'You are cue, whispering suggested replies to the user during a live interview or conversation. ' +
+      'Look at what is shown on screen and what was said in the conversation. ' +
+      'Draft ONE short, natural, confident reply the user can say out loud in the first person. ' +
+      'Keep it direct, professional, and grounded in the user\'s background. 1–3 sentences, no quotes, no preamble.',
     build(ctx) {
       const t = formatTranscript(ctx.transcript, 14);
-      return 'Conversation so far:\n' + (t || '(nothing heard yet — the user opened cue without audio)') +
-        '\n\nWhat should I say next?';
+      return (t ? 'Conversation so far:\n' + t + '\n\n' : '') +
+        'Based on the screen and conversation, draft what I should say next.';
     }
   },
 
-  // Smart follow-up questions to keep the conversation going.
+  // Instant code and error debugger.
+  debug: {
+    needsScreen: true,
+    userBubble: 'Debug & explain screen',
+    small: false,
+    system:
+      'You are a senior software engineer. The screenshot shows code, an error message, a stack trace, or a technical diagram. ' +
+      'Analyze what is on screen and deliver: (1) a concise explanation of what is happening or why it failed, ' +
+      '(2) the exact fix or corrected code block, (3) any key edge case or takeaway. Be direct and technical with no fluff.',
+    build() {
+      return 'Debug the code, error, or system shown in the screenshot. Explain what is happening and provide the fix.';
+    }
+  },
+
+  // Smart follow-up questions (optional/legacy).
   followup: {
     needsScreen: false,
     userBubble: 'Follow-up questions',
@@ -54,7 +69,7 @@ const MODES = {
     }
   },
 
-  // Recap of the whole session.
+  // Recap of the whole session (optional/legacy).
   recap: {
     needsScreen: false,
     userBubble: 'Recap',
